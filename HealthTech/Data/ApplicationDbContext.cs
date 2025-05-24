@@ -26,7 +26,7 @@ namespace HealthTech.Data
             // Configure QuizSession to store Questions as JSONB
             modelBuilder.Entity<QuizSession>()
                 .Property(s => s.Questions)
-                .HasColumnType("jsonb") // Explicitly set to jsonb for PostgreSQL
+                .HasColumnType("jsonb")
                 .HasConversion(
                     v => JsonSerializer.Serialize(v, new JsonSerializerOptions { PropertyNamingPolicy = null }),
                     v => JsonSerializer.Deserialize<List<QuizQuestion>>(v, new JsonSerializerOptions { PropertyNamingPolicy = null }) ?? new List<QuizQuestion>(),
