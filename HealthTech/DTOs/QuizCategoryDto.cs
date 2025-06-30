@@ -1,6 +1,4 @@
-﻿using HealthTech.Models;
-
-namespace HealthTech.DTOs
+﻿namespace HealthTech.DTOs
 {
     public class QuizCategoryDto
     {
@@ -22,13 +20,14 @@ namespace HealthTech.DTOs
     public class QuizSubmissionDto
     {
         public int CategoryId { get; set; }
-        public Dictionary<int, char> Answers { get; set; } // e.g., {1: 'A', 2: 'C'}
+        public Dictionary<int, char> Answers { get; set; }
     }
 
     public class QuizResultDto
     {
         public int Score { get; set; }
         public int TotalQuestions { get; set; }
+        public string FormattedScore => $"{Score}/{TotalQuestions}";
         public List<MissedQuestionDto> MissedQuestions { get; set; }
     }
 
@@ -36,7 +35,8 @@ namespace HealthTech.DTOs
     {
         public string Text { get; set; }
         public string UserAnswer { get; set; }
-        public string CorrectAnswer { get; set; }
+        public string CorrectAnswer { get; set; } // Formatted as "A: Ellipse of the sun"
+        public string Explanation { get; set; }
     }
 
     public class QuizScoreDto

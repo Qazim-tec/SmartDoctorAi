@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace HealthTech.Data
 {
@@ -28,12 +29,29 @@ namespace HealthTech.Data
                 .Property(s => s.Questions)
                 .HasColumnType("jsonb")
                 .HasConversion(
-                    v => JsonSerializer.Serialize(v, new JsonSerializerOptions { PropertyNamingPolicy = null }),
-                    v => JsonSerializer.Deserialize<List<QuizQuestion>>(v, new JsonSerializerOptions { PropertyNamingPolicy = null }) ?? new List<QuizQuestion>(),
+                    v => JsonSerializer.Serialize(v, new JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = null,
+                        Converters = { new JsonStringEnumConverter() },
+                        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+                    }),
+                    v => JsonSerializer.Deserialize<List<QuizQuestion>>(v, new JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = null,
+                        Converters = { new JsonStringEnumConverter() },
+                        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+                    }) ?? new List<QuizQuestion>(),
                     new ValueComparer<List<QuizQuestion>>(
                         (c1, c2) => c1.SequenceEqual(c2),
                         c => c.Aggregate(0, (a, v) => HashCode.Combine(a, v.GetHashCode())),
                         c => c.ToList()));
+
+            // Configure QuizScore -> QuizCategory relationship
+            modelBuilder.Entity<QuizScore>()
+                .HasOne(s => s.Category)
+                .WithMany()
+                .HasForeignKey(s => s.CategoryId)
+                .OnDelete(DeleteBehavior.Restrict); // Prevent cascade delete
         }
     }
 }

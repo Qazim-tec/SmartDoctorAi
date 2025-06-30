@@ -67,7 +67,6 @@ namespace HealthTech.Service
                 throw new InvalidOperationException($"Generated only {questions.Count} questions; 50 required.");
             }
 
-            // Log correct answers for debugging
             _logger.LogInformation("Generated questions for category {CategoryId}: {CorrectAnswers}",
                 categoryId, string.Join(", ", questions.Take(50).Select(q => $"Q{q.Id}: {q.CorrectOption}")));
 
@@ -84,7 +83,6 @@ namespace HealthTech.Service
 
         public async Task<QuizResultDto> SubmitQuizAsync(QuizSubmissionDto submission, string userId)
         {
-            // Validate submission
             if (submission == null || submission.Answers == null)
             {
                 _logger.LogWarning("Submission or answers are null for user {UserId}", userId);
@@ -97,20 +95,6 @@ namespace HealthTech.Service
                 throw new ArgumentException("Category ID must be greater than zero.");
             }
 
-            if (submission.Answers.Count != 50)
-            {
-                _logger.LogWarning("Invalid answers count: {Count} for user {UserId}", submission.Answers.Count, userId);
-                throw new ArgumentException("Exactly 50 answers are required.");
-            }
-
-            // Verify all keys are 1 to 50
-            var expectedKeys = Enumerable.Range(1, 50).ToHashSet();
-            if (!submission.Answers.Keys.All(k => expectedKeys.Contains(k)))
-            {
-                _logger.LogWarning("Invalid answer keys for user {UserId}. Expected 1-50.", userId);
-                throw new ArgumentException("Answer keys must be numbers 1 to 50.");
-            }
-
             var category = await _context.QuizCategories.FindAsync(submission.CategoryId);
             if (category == null)
             {
@@ -118,25 +102,25 @@ namespace HealthTech.Service
                 throw new ArgumentException("Invalid category ID.");
             }
 
-            // Retrieve quiz session
             var quizSession = await _context.QuizSessions
                 .Where(s => s.UserId == userId && s.CategoryId == submission.CategoryId)
                 .OrderByDescending(s => s.CreatedAt)
                 .FirstOrDefaultAsync();
 
-            if (quizSession == null || quizSession.Questions == null || quizSession.Questions.Count != 50)
+            if (quizSession == null || quizSession.Questions == null || quizSession.Questions.Count != 50 || quizSession.CreatedAt < DateTime.UtcNow.AddHours(-24))
             {
-                _logger.LogWarning("Quiz session not found or invalid for user {UserId}, category {CategoryId}", userId, submission.CategoryId);
-                throw new InvalidOperationException("Quiz session not found or incomplete. Please generate a new quiz.");
+                _logger.LogWarning("Quiz session not found, invalid, or expired for user {UserId}, category {CategoryId}", userId, submission.CategoryId);
+                throw new InvalidOperationException("Quiz session not found, incomplete, or expired. Please generate a new quiz.");
             }
 
-            // Log session questions for debugging
             _logger.LogInformation("Quiz session questions for user {UserId}, category {CategoryId}: {CorrectAnswers}",
                 userId, submission.CategoryId, string.Join(", ", quizSession.Questions.Select(q => $"Q{q.Id}: {q.CorrectOption}")));
 
             int score = 0;
             var missedQuestions = new List<MissedQuestionDto>();
+            var expectedKeys = Enumerable.Range(1, 50).ToHashSet();
 
+            // Validate provided answers
             foreach (var answer in submission.Answers)
             {
                 int questionId = answer.Key;
@@ -144,7 +128,12 @@ namespace HealthTech.Service
                 char userAnswerUpper = char.ToUpper(userAnswerChar, CultureInfo.InvariantCulture);
                 string userAnswer = userAnswerUpper.ToString();
 
-                // Validate answer
+                if (!expectedKeys.Contains(questionId))
+                {
+                    _logger.LogWarning("Invalid question ID {QuestionId} for user {UserId}", questionId, userId);
+                    throw new ArgumentException($"Invalid question ID {questionId}. Must be between 1 and 50.");
+                }
+
                 if (!"ABCD".Contains(userAnswer))
                 {
                     _logger.LogWarning("Invalid answer value: {Value} for question {QuestionId}, user {UserId}", userAnswer, questionId, userId);
@@ -159,12 +148,12 @@ namespace HealthTech.Service
                     {
                         Text = $"Question {questionId} (not found)",
                         UserAnswer = userAnswer,
-                        CorrectAnswer = "Unknown"
+                        CorrectAnswer = "Unknown",
+                        Explanation = "Question not found in session."
                     });
                     continue;
                 }
 
-                // Compare answers
                 string correctOptionUpper = question.CorrectOption?.ToUpper(CultureInfo.InvariantCulture) ?? "";
                 if (string.IsNullOrEmpty(correctOptionUpper))
                 {
@@ -173,14 +162,26 @@ namespace HealthTech.Service
                     {
                         Text = question.Text,
                         UserAnswer = userAnswer,
-                        CorrectAnswer = "Unknown"
+                        CorrectAnswer = "Unknown",
+                        Explanation = "Correct answer not available."
                     });
                     continue;
                 }
 
+                string correctOptionText = correctOptionUpper switch
+                {
+                    "A" => question.OptionA,
+                    "B" => question.OptionB,
+                    "C" => question.OptionC,
+                    "D" => question.OptionD,
+                    _ => "Unknown"
+                };
+
+                string formattedCorrectAnswer = $"{correctOptionUpper}: {correctOptionText}";
                 bool isCorrect = userAnswer == correctOptionUpper;
+
                 _logger.LogDebug("Question {QuestionId}: UserAnswer={UserAnswer}, CorrectOption={CorrectOption}, IsCorrect={IsCorrect}",
-                    questionId, userAnswer, correctOptionUpper, isCorrect);
+                    questionId, userAnswer, formattedCorrectAnswer, isCorrect);
 
                 if (isCorrect)
                 {
@@ -192,16 +193,71 @@ namespace HealthTech.Service
                     {
                         Text = question.Text,
                         UserAnswer = userAnswer,
-                        CorrectAnswer = question.CorrectOption
+                        CorrectAnswer = formattedCorrectAnswer,
+                        Explanation = question.Explanation ?? "No explanation available."
                     });
+                    _logger.LogInformation("Missed question {QuestionId}: UserAnswer={UserAnswer}, CorrectAnswer={CorrectAnswer}, Explanation={Explanation}",
+                        questionId, userAnswer, formattedCorrectAnswer, question.Explanation);
                 }
+
+                expectedKeys.Remove(questionId); // Remove answered question
             }
 
-            // Use a transaction to ensure atomic operations
+            // Handle unanswered questions
+            foreach (var questionId in expectedKeys)
+            {
+                var question = quizSession.Questions.FirstOrDefault(q => q.Id == questionId);
+                if (question == null)
+                { 
+                    _logger.LogWarning("Question {QuestionId} not found in session for user {UserId}", questionId, userId);
+                    missedQuestions.Add(new MissedQuestionDto
+                    {
+                        Text = $"Question {questionId} (not found)",
+                        UserAnswer = "None",
+                        CorrectAnswer = "Unknown",
+                        Explanation = "Question not found in session."
+                    });
+                    continue;
+                }
+
+                string correctOptionUpper = question.CorrectOption?.ToUpper(CultureInfo.InvariantCulture) ?? "";
+                if (string.IsNullOrEmpty(correctOptionUpper))
+                {
+                    _logger.LogWarning("Correct option missing for question {QuestionId}, user {UserId}", questionId, userId);
+                    missedQuestions.Add(new MissedQuestionDto
+                    {
+                        Text = question.Text,
+                        UserAnswer = "None",
+                        CorrectAnswer = "Unknown",
+                        Explanation = "Correct answer not available."
+                    });
+                    continue;
+                }
+
+                string correctOptionText = correctOptionUpper switch
+                {
+                    "A" => question.OptionA,
+                    "B" => question.OptionB,
+                    "C" => question.OptionC,
+                    "D" => question.OptionD,
+                    _ => "Unknown"
+                };
+
+                string formattedCorrectAnswer = $"{correctOptionUpper}: {correctOptionText}";
+                missedQuestions.Add(new MissedQuestionDto
+                {
+                    Text = question.Text,
+                    UserAnswer = "None",
+                    CorrectAnswer = formattedCorrectAnswer,
+                    Explanation = question.Explanation ?? "No explanation available."
+                });
+                _logger.LogInformation("Unanswered question {QuestionId}: CorrectAnswer={CorrectAnswer}, Explanation={Explanation}",
+                    questionId, formattedCorrectAnswer, question.Explanation);
+            }
+
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
-                // Store score
                 var quizScore = new QuizScore
                 {
                     UserId = userId,
@@ -210,8 +266,6 @@ namespace HealthTech.Service
                     Score = score
                 };
                 _context.QuizScores.Add(quizScore);
-
-                // Delete quiz session
                 _context.QuizSessions.Remove(quizSession);
 
                 await _context.SaveChangesAsync();
@@ -254,7 +308,6 @@ namespace HealthTech.Service
         {
             try
             {
-                // Remove any existing quiz sessions for this user and category
                 var existingSessions = await _context.QuizSessions
                     .Where(s => s.UserId == userId && s.CategoryId == categoryId)
                     .ToListAsync();
@@ -286,6 +339,7 @@ namespace HealthTech.Service
 - A clear, accurate question relevant to {category}.
 - Four answer options (labeled A, B, C, D).
 - A correct answer (indicated as A, B, C, or D).
+- A brief explanation (1-2 sentences) explaining why the correct option is correct.
 Return the response in the following JSON format (no Markdown, no additional text):
 [
   {{
@@ -295,7 +349,8 @@ Return the response in the following JSON format (no Markdown, no additional tex
     ""optionB"": ""Option B"",
     ""optionC"": ""Option C"",
     ""optionD"": ""Option D"",
-    ""correctOption"": ""A""
+    ""correctOption"": ""A"",
+    ""explanation"": ""Explanation for why A is correct.""
   }},
   ...
 ]
@@ -324,7 +379,7 @@ Ensure all questions are unique, factually correct, and appropriate for medical/
 
                 if (!response.IsSuccessful || string.IsNullOrEmpty(response.Content))
                 {
-                    _logger.LogError("Gemini API call failed. Status: {StatusCode}, Content: {Content}", response.StatusCode, response.Content);
+                    _logger.LogError("Gemini AI call failed. Status: {StatusCode}, Content: {Content}", response.StatusCode, response.Content);
                     throw new InvalidOperationException($"API Error: {response.StatusCode} - {response.Content}");
                 }
 
@@ -352,13 +407,11 @@ Ensure all questions are unique, factually correct, and appropriate for medical/
                     throw new InvalidOperationException($"AI returned {questions?.Count ?? 0} questions; 50 required.");
                 }
 
-                // Assign IDs
                 for (int i = 0; i < questions.Count; i++)
                 {
                     questions[i].Id = i + 1;
                 }
 
-                // Store questions temporarily
                 var quizSession = new QuizSession
                 {
                     UserId = userId,
@@ -366,6 +419,7 @@ Ensure all questions are unique, factually correct, and appropriate for medical/
                     Questions = questions.Take(50).ToList(),
                     CreatedAt = DateTime.UtcNow
                 };
+
                 _context.QuizSessions.Add(quizSession);
                 await _context.SaveChangesAsync();
 
@@ -382,7 +436,5 @@ Ensure all questions are unique, factually correct, and appropriate for medical/
                 throw;
             }
         }
-
-       
     }
 }

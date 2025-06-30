@@ -16,6 +16,7 @@
         public string OptionC { get; set; }
         public string OptionD { get; set; }
         public string CorrectOption { get; set; }
+        public string Explanation { get; set; } // For explanations
     }
 
     public class QuizScore
@@ -33,7 +34,7 @@
         public int Id { get; set; }
         public string UserId { get; set; }
         public int CategoryId { get; set; }
-        public List<QuizQuestion> Questions { get; set; }
+        public List<QuizQuestion> Questions { get; set; } = new List<QuizQuestion>(); // JSONB column
         public DateTime CreatedAt { get; set; }
     }
 }
