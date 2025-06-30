@@ -28,7 +28,7 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
-    options.SwaggerDoc("v1", new OpenApiInfo { Title = "HealthTech API", Version = "v1" });
+    options.SwaggerDoc("v1", new OpenApiInfo { Title = "SmartDoc API", Version = "v1" });
 
     options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
@@ -98,14 +98,17 @@ builder.Services.AddLogging();
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "SmartDoc API v1");
+    c.RoutePrefix = "swagger";
+});
 
-// Enable CORS before authentication/authorization
 app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
 
 // Seed quiz categories
 using (var scope = app.Services.CreateScope())
@@ -113,11 +116,6 @@ using (var scope = app.Services.CreateScope())
     var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     SeedQuizCategories(context);
 }
-
-app.UseHttpsRedirection();
-app.UseAuthentication();
-app.UseAuthorization();
-app.MapControllers();
 
 app.Run();
 
@@ -128,7 +126,6 @@ void SeedQuizCategories(ApplicationDbContext context)
     {
         var categories = new List<QuizCategory>
         {
-            // Medical Categories
             new QuizCategory { Name = "Anatomy", IsMedical = true },
             new QuizCategory { Name = "Physiology", IsMedical = true },
             new QuizCategory { Name = "Biochemistry", IsMedical = true },
@@ -140,7 +137,6 @@ void SeedQuizCategories(ApplicationDbContext context)
             new QuizCategory { Name = "Medicine", IsMedical = true },
             new QuizCategory { Name = "Surgery", IsMedical = true },
             new QuizCategory { Name = "Community Health", IsMedical = true },
-            // Dental Categories
             new QuizCategory { Name = "Prosthodontics", IsMedical = false },
             new QuizCategory { Name = "Orthodontics", IsMedical = false },
             new QuizCategory { Name = "Pedodontics", IsMedical = false },
